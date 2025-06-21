@@ -1,0 +1,952 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# GoalFlow Coding Standards & Best Practices
+
+## 1. Project Structure & Organization
+
+### Directory Structure
+```
+src/
+├── components/          # Reusable UI components
+│   ├── common/         # Generic components (Button, Input, etc.)
+│   ├── journal/        # Journal-specific components
+│   └── social/         # Social feature components
+├── screens/            # Screen components
+├── hooks/              # Custom React hooks
+├── services/           # API calls and business logic
+├── store/              # State management (Zustand)
+├── utils/              # Helper functions
+├── types/              # TypeScript type definitions
+├── constants/          # App constants and config
+└── assets/             # Images, fonts, etc.
+```
+
+### File Naming Conventions
+```typescript
+// Components: PascalCase
+JournalEntry.tsx
+DailyDeadlineTimer.tsx
+
+// Hooks: camelCase with 'use' prefix
+useJournalEntry.ts
+useDailyDeadline.ts
+
+// Services: camelCase
+journalService.ts
+syncService.ts
+
+// Utils: camelCase
+dateUtils.ts
+hashtagParser.ts
+
+// Types: PascalCase with descriptive suffix
+JournalEntry.types.ts
+User.types.ts
+```
+
+## 2. TypeScript Rules
+
+### Strict Type Safety
+```typescript
+// ✅ GOOD: Explicit types for all functions
+const parseHashtags = (text: string): HashtagData[] => {
+  // implementation
+}
+
+// ✅ GOOD: Interface over type for objects
+interface JournalEntry {
+  id: string
+  content: string
+  hashtags: HashtagData[]
+  submittedAt: Date | null
+  isDraft: boolean
+}
+
+// ❌ BAD: Using 'any'
+const processEntry = (data: any) => { /* ... */ }
+
+// ✅ GOOD: Use unknown and type guards
+const processEntry = (data: unknown): JournalEntry | null => {
+  if (isJournalEntry(data)) {
+    return data
+  }
+  return null
+}
+```
+
+### Type Organization
+```typescript
+// Group related types in dedicated files
+// types/journal.types.ts
+export interface JournalEntry {
+  id: string
+  userId: string
+  content: string
+  hashtags: HashtagData[]
+  createdAt: Date
+  submittedAt: Date | null
+  isDraft: boolean
+}
+
+export interface HashtagData {
+  tag: string
+  duration?: number
+  color?: string
+}
+
+export type JournalEntryStatus = 'draft' | 'submitted' | 'shared'
+```
+
+## 3. React Native Component Rules
+
+### Component Structure
+```typescript
+// ✅ GOOD: Component template
+interface JournalEntryProps {
+  entry: JournalEntry
+  onSave: (content: string) => void
+  isEditable?: boolean
+}
+
+export const JournalEntryComponent: React.FC<JournalEntryProps> = ({
+  entry,
+  onSave,
+  isEditable = false
+}) => {
+  // 1. Hooks at the top
+  const [content, setContent] = useState(entry.content)
+  const { isOnline } = useNetworkStatus()
+  
+  // 2. Event handlers
+  const handleSave = useCallback(() => {
+    onSave(content)
+  }, [content, onSave])
+  
+  // 3. Effects
+  useEffect(() => {
+    // Auto-save drafts every 30 seconds
+    const interval = setInterval(() => {
+      if (isEditable && content !== entry.content) {
+        handleSave()
+      }
+    }, 30000)
+    
+    return () => clearInterval(interval)
+  }, [content, entry.content, handleSave, isEditable])
+  
+  // 4. Render
+  return (
+    <View style={styles.container}>
+      {/* JSX */}
+    </View>
+  )
+}
+```
+
+### Performance Rules
+```typescript
+// ✅ GOOD: Memoize expensive operations
+const processedHashtags = useMemo(() => {
+  return parseHashtags(entry.content)
+}, [entry.content])
+
+// ✅ GOOD: Memoize callbacks to prevent re-renders
+const handleHashtagPress = useCallback((hashtag: string) => {
+  navigation.navigate('HashtagFeed', { hashtag })
+}, [navigation])
+
+// ✅ GOOD: Memoize components that don't need re-renders
+const HashtagList = React.memo<HashtagListProps>(({ hashtags, onPress }) => {
+  // Component implementation
+})
+```
+
+## 4. State Management (Zustand)
+
+### Store Structure
+```typescript
+// store/journalStore.ts
+interface JournalState {
+  // State
+  currentEntry: JournalEntry | null
+  entries: JournalEntry[]
+  isLoading: boolean
+  lastSyncedAt: Date | null
+  
+  // Actions
+  setCurrentEntry: (entry: JournalEntry) => void
+  updateCurrentEntry: (content: string) => void
+  submitEntry: () => Promise<void>
+  syncEntries: () => Promise<void>
+  
+  // Computed values
+  todaysEntry: JournalEntry | null
+  currentStreak: number
+}
+
+export const useJournalStore = create<JournalState>((set, get) => ({
+  // Initial state
+  currentEntry: null,
+  entries: [],
+  isLoading: false,
+  lastSyncedAt: null,
+  
+  // Actions
+  setCurrentEntry: (entry) => set({ currentEntry: entry }),
+  
+  updateCurrentEntry: (content) => set((state) => ({
+    currentEntry: state.currentEntry 
+      ? { ...state.currentEntry, content }
+      : null
+  })),
+  
+  submitEntry: async () => {
+    const { currentEntry } = get()
+    if (!currentEntry) return
+    
+    try {
+      set({ isLoading: true })
+      await journalService.submitEntry(currentEntry)
+      set((state) => ({
+        entries: [...state.entries, { ...currentEntry, submittedAt: new Date() }],
+        currentEntry: null,
+        isLoading: false
+      }))
+    } catch (error) {
+      set({ isLoading: false })
+      throw error
+    }
+  },
+  
+  // Computed values (using getters)
+  get todaysEntry() {
+    const today = new Date().toDateString()
+    return get().entries.find(entry => 
+      entry.createdAt.toDateString() === today
+    ) || null
+  },
+  
+  get currentStreak() {
+    // Calculate streak logic
+    return calculateStreak(get().entries)
+  }
+}))
+```
+
+## 5. Database & Sync Rules
+
+### Watermelon DB Models
+```typescript
+// models/JournalEntry.ts
+import { Model } from '@nozbe/watermelondb'
+import { field, date, readonly } from '@nozbe/watermelondb/decorators'
+
+export class JournalEntry extends Model {
+  static table = 'journal_entries'
+  
+  @field('user_id') userId!: string
+  @field('content') content!: string
+  @field('hashtags') hashtags!: string // JSON string
+  @date('created_at') createdAt!: Date
+  @date('submitted_at') submittedAt?: Date
+  @field('is_draft') isDraft!: boolean
+  @readonly @date('updated_at') updatedAt!: Date
+  
+  // Helper methods
+  get parsedHashtags(): HashtagData[] {
+    return JSON.parse(this.hashtags || '[]')
+  }
+  
+  get isSubmitted(): boolean {
+    return !!this.submittedAt
+  }
+}
+```
+
+### Sync Service Rules
+```typescript
+// services/syncService.ts
+class SyncService {
+  private supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  
+  async syncToCloud(entries: JournalEntry[]): Promise<void> {
+    try {
+      // Only sync submitted entries for privacy
+      const submittedEntries = entries.filter(entry => entry.isSubmitted)
+      
+      const { error } = await this.supabase
+        .from('journal_entries')
+        .upsert(submittedEntries.map(this.transformForSupabase))
+      
+      if (error) throw error
+    } catch (error) {
+      console.error('Sync failed:', error)
+      // Store for retry later
+      await this.queueForRetry(entries)
+    }
+  }
+  
+  private transformForSupabase(entry: JournalEntry) {
+    return {
+      id: entry.id,
+      user_id: entry.userId,
+      content: entry.content,
+      hashtags: entry.hashtags,
+      created_at: entry.createdAt.toISOString(),
+      submitted_at: entry.submittedAt?.toISOString(),
+      updated_at: entry.updatedAt.toISOString()
+    }
+  }
+}
+```
+
+## 6. Error Handling & Logging
+
+### Consistent Error Handling
+```typescript
+// utils/errorHandler.ts
+export class AppError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public isRetryable: boolean = false
+  ) {
+    super(message)
+    this.name = 'AppError'
+  }
+}
+
+export const handleError = (error: unknown, context: string) => {
+  if (error instanceof AppError) {
+    // Log to analytics
+    Analytics.track('Error', {
+      code: error.code,
+      message: error.message,
+      context,
+      isRetryable: error.isRetryable
+    })
+  } else {
+    // Log unexpected errors
+    console.error(`Unexpected error in ${context}:`, error)
+  }
+}
+
+// Usage in components
+const handleSaveEntry = async () => {
+  try {
+    await journalService.saveEntry(entry)
+  } catch (error) {
+    handleError(error, 'JournalEntry.handleSave')
+    
+    if (error instanceof AppError && error.isRetryable) {
+      // Show retry option
+      setShowRetryDialog(true)
+    } else {
+      // Show generic error message
+      showErrorToast('Failed to save entry')
+    }
+  }
+}
+```
+
+## 7. Testing Rules
+
+### Unit Test Structure
+```typescript
+// __tests__/services/journalService.test.ts
+describe('JournalService', () => {
+  describe('parseHashtags', () => {
+    it('should extract hashtags with duration', () => {
+      const content = '#HEALTH 30min\n- Running\n#WORK 2h'
+      const result = journalService.parseHashtags(content)
+      
+      expect(result).toEqual([
+        { tag: 'HEALTH', duration: 30 },
+        { tag: 'WORK', duration: 120 }
+      ])
+    })
+    
+    it('should handle hashtags without duration', () => {
+      const content = '#MEDITATION\n- 10 minutes of breathing'
+      const result = journalService.parseHashtags(content)
+      
+      expect(result).toEqual([
+        { tag: 'MEDITATION', duration: undefined }
+      ])
+    })
+  })
+})
+```
+
+## 8. Performance & Optimization
+
+### Image and Asset Rules
+```typescript
+// Use optimized images
+const images = {
+  // Use require for bundled assets
+  emptyState: require('../assets/images/empty-state.png'),
+  // Use remote URLs with caching for dynamic content
+  userAvatar: { uri: avatarUrl, cache: 'force-cache' }
+}
+
+// Lazy load heavy components
+const SocialFeed = lazy(() => import('../screens/SocialFeed'))
+```
+
+### Memory Management
+```typescript
+// Clean up subscriptions and timers
+useEffect(() => {
+  const timer = setInterval(autoSave, 30000)
+  const subscription = syncService.onSyncComplete(handleSyncComplete)
+  
+  return () => {
+    clearInterval(timer)
+    subscription.unsubscribe()
+  }
+}, [])
+```
+
+## 9. Security Rules
+
+### Data Sanitization
+```typescript
+// Always sanitize user input
+const sanitizeContent = (content: string): string => {
+  return content
+    .trim()
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .substring(0, MAX_CONTENT_LENGTH)
+}
+
+// Validate hashtags
+const isValidHashtag = (tag: string): boolean => {
+  return /^[A-Z][A-Z0-9_]{0,19}$/i.test(tag)
+}
+```
+
+### Privacy Controls
+```typescript
+// Check sharing permissions before displaying content
+const canViewEntry = (entry: JournalEntry, currentUser: User): boolean => {
+  if (entry.userId === currentUser.id) return true
+  if (!entry.isShared) return false
+  
+  // Check if user has permission to view shared content
+  return entry.sharedWith.includes(currentUser.id) || entry.isPublic
+}
+```
+
+## 10. Code Quality Rules
+
+### Linting Configuration
+```json
+// .eslintrc.js
+{
+  "extends": [
+    "@react-native-community",
+    "@typescript-eslint/recommended"
+  ],
+  "rules": {
+    "no-console": "warn",
+    "prefer-const": "error",
+    "@typescript-eslint/no-unused-vars": "error",
+    "@typescript-eslint/explicit-function-return-type": "warn",
+    "react-hooks/exhaustive-deps": "error"
+  }
+}
+```
+
+### Pre-commit Hooks
+```json
+// package.json
+{
+  "husky": {
+    "hooks": {
+      "pre-commit": "lint-staged && npm test"
+    }
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": ["eslint --fix", "prettier --write"]
+  }
+}
+```
+
+These coding standards ensure the GoalFlow app maintains high code quality, performance, and reliability while staying true to its gentle, supportive philosophy.# GoalFlow Coding Standards & Best Practices
+
+## 1. Project Structure & Organization
+
+### Directory Structure
+```
+src/
+├── components/          # Reusable UI components
+│   ├── common/         # Generic components (Button, Input, etc.)
+│   ├── journal/        # Journal-specific components
+│   └── social/         # Social feature components
+├── screens/            # Screen components
+├── hooks/              # Custom React hooks
+├── services/           # API calls and business logic
+├── store/              # State management (Zustand)
+├── utils/              # Helper functions
+├── types/              # TypeScript type definitions
+├── constants/          # App constants and config
+└── assets/             # Images, fonts, etc.
+```
+
+### File Naming Conventions
+```typescript
+// Components: PascalCase
+JournalEntry.tsx
+DailyDeadlineTimer.tsx
+
+// Hooks: camelCase with 'use' prefix
+useJournalEntry.ts
+useDailyDeadline.ts
+
+// Services: camelCase
+journalService.ts
+syncService.ts
+
+// Utils: camelCase
+dateUtils.ts
+hashtagParser.ts
+
+// Types: PascalCase with descriptive suffix
+JournalEntry.types.ts
+User.types.ts
+```
+
+## 2. TypeScript Rules
+
+### Strict Type Safety
+```typescript
+// ✅ GOOD: Explicit types for all functions
+const parseHashtags = (text: string): HashtagData[] => {
+  // implementation
+}
+
+// ✅ GOOD: Interface over type for objects
+interface JournalEntry {
+  id: string
+  content: string
+  hashtags: HashtagData[]
+  submittedAt: Date | null
+  isDraft: boolean
+}
+
+// ❌ BAD: Using 'any'
+const processEntry = (data: any) => { /* ... */ }
+
+// ✅ GOOD: Use unknown and type guards
+const processEntry = (data: unknown): JournalEntry | null => {
+  if (isJournalEntry(data)) {
+    return data
+  }
+  return null
+}
+```
+
+### Type Organization
+```typescript
+// Group related types in dedicated files
+// types/journal.types.ts
+export interface JournalEntry {
+  id: string
+  userId: string
+  content: string
+  hashtags: HashtagData[]
+  createdAt: Date
+  submittedAt: Date | null
+  isDraft: boolean
+}
+
+export interface HashtagData {
+  tag: string
+  duration?: number
+  color?: string
+}
+
+export type JournalEntryStatus = 'draft' | 'submitted' | 'shared'
+```
+
+## 3. React Native Component Rules
+
+### Component Structure
+```typescript
+// ✅ GOOD: Component template
+interface JournalEntryProps {
+  entry: JournalEntry
+  onSave: (content: string) => void
+  isEditable?: boolean
+}
+
+export const JournalEntryComponent: React.FC<JournalEntryProps> = ({
+  entry,
+  onSave,
+  isEditable = false
+}) => {
+  // 1. Hooks at the top
+  const [content, setContent] = useState(entry.content)
+  const { isOnline } = useNetworkStatus()
+  
+  // 2. Event handlers
+  const handleSave = useCallback(() => {
+    onSave(content)
+  }, [content, onSave])
+  
+  // 3. Effects
+  useEffect(() => {
+    // Auto-save drafts every 30 seconds
+    const interval = setInterval(() => {
+      if (isEditable && content !== entry.content) {
+        handleSave()
+      }
+    }, 30000)
+    
+    return () => clearInterval(interval)
+  }, [content, entry.content, handleSave, isEditable])
+  
+  // 4. Render
+  return (
+    <View style={styles.container}>
+      {/* JSX */}
+    </View>
+  )
+}
+```
+
+### Performance Rules
+```typescript
+// ✅ GOOD: Memoize expensive operations
+const processedHashtags = useMemo(() => {
+  return parseHashtags(entry.content)
+}, [entry.content])
+
+// ✅ GOOD: Memoize callbacks to prevent re-renders
+const handleHashtagPress = useCallback((hashtag: string) => {
+  navigation.navigate('HashtagFeed', { hashtag })
+}, [navigation])
+
+// ✅ GOOD: Memoize components that don't need re-renders
+const HashtagList = React.memo<HashtagListProps>(({ hashtags, onPress }) => {
+  // Component implementation
+})
+```
+
+## 4. State Management (Zustand)
+
+### Store Structure
+```typescript
+// store/journalStore.ts
+interface JournalState {
+  // State
+  currentEntry: JournalEntry | null
+  entries: JournalEntry[]
+  isLoading: boolean
+  lastSyncedAt: Date | null
+  
+  // Actions
+  setCurrentEntry: (entry: JournalEntry) => void
+  updateCurrentEntry: (content: string) => void
+  submitEntry: () => Promise<void>
+  syncEntries: () => Promise<void>
+  
+  // Computed values
+  todaysEntry: JournalEntry | null
+  currentStreak: number
+}
+
+export const useJournalStore = create<JournalState>((set, get) => ({
+  // Initial state
+  currentEntry: null,
+  entries: [],
+  isLoading: false,
+  lastSyncedAt: null,
+  
+  // Actions
+  setCurrentEntry: (entry) => set({ currentEntry: entry }),
+  
+  updateCurrentEntry: (content) => set((state) => ({
+    currentEntry: state.currentEntry 
+      ? { ...state.currentEntry, content }
+      : null
+  })),
+  
+  submitEntry: async () => {
+    const { currentEntry } = get()
+    if (!currentEntry) return
+    
+    try {
+      set({ isLoading: true })
+      await journalService.submitEntry(currentEntry)
+      set((state) => ({
+        entries: [...state.entries, { ...currentEntry, submittedAt: new Date() }],
+        currentEntry: null,
+        isLoading: false
+      }))
+    } catch (error) {
+      set({ isLoading: false })
+      throw error
+    }
+  },
+  
+  // Computed values (using getters)
+  get todaysEntry() {
+    const today = new Date().toDateString()
+    return get().entries.find(entry => 
+      entry.createdAt.toDateString() === today
+    ) || null
+  },
+  
+  get currentStreak() {
+    // Calculate streak logic
+    return calculateStreak(get().entries)
+  }
+}))
+```
+
+## 5. Database & Sync Rules
+
+### Watermelon DB Models
+```typescript
+// models/JournalEntry.ts
+import { Model } from '@nozbe/watermelondb'
+import { field, date, readonly } from '@nozbe/watermelondb/decorators'
+
+export class JournalEntry extends Model {
+  static table = 'journal_entries'
+  
+  @field('user_id') userId!: string
+  @field('content') content!: string
+  @field('hashtags') hashtags!: string // JSON string
+  @date('created_at') createdAt!: Date
+  @date('submitted_at') submittedAt?: Date
+  @field('is_draft') isDraft!: boolean
+  @readonly @date('updated_at') updatedAt!: Date
+  
+  // Helper methods
+  get parsedHashtags(): HashtagData[] {
+    return JSON.parse(this.hashtags || '[]')
+  }
+  
+  get isSubmitted(): boolean {
+    return !!this.submittedAt
+  }
+}
+```
+
+### Sync Service Rules
+```typescript
+// services/syncService.ts
+class SyncService {
+  private supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  
+  async syncToCloud(entries: JournalEntry[]): Promise<void> {
+    try {
+      // Only sync submitted entries for privacy
+      const submittedEntries = entries.filter(entry => entry.isSubmitted)
+      
+      const { error } = await this.supabase
+        .from('journal_entries')
+        .upsert(submittedEntries.map(this.transformForSupabase))
+      
+      if (error) throw error
+    } catch (error) {
+      console.error('Sync failed:', error)
+      // Store for retry later
+      await this.queueForRetry(entries)
+    }
+  }
+  
+  private transformForSupabase(entry: JournalEntry) {
+    return {
+      id: entry.id,
+      user_id: entry.userId,
+      content: entry.content,
+      hashtags: entry.hashtags,
+      created_at: entry.createdAt.toISOString(),
+      submitted_at: entry.submittedAt?.toISOString(),
+      updated_at: entry.updatedAt.toISOString()
+    }
+  }
+}
+```
+
+## 6. Error Handling & Logging
+
+### Consistent Error Handling
+```typescript
+// utils/errorHandler.ts
+export class AppError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public isRetryable: boolean = false
+  ) {
+    super(message)
+    this.name = 'AppError'
+  }
+}
+
+export const handleError = (error: unknown, context: string) => {
+  if (error instanceof AppError) {
+    // Log to analytics
+    Analytics.track('Error', {
+      code: error.code,
+      message: error.message,
+      context,
+      isRetryable: error.isRetryable
+    })
+  } else {
+    // Log unexpected errors
+    console.error(`Unexpected error in ${context}:`, error)
+  }
+}
+
+// Usage in components
+const handleSaveEntry = async () => {
+  try {
+    await journalService.saveEntry(entry)
+  } catch (error) {
+    handleError(error, 'JournalEntry.handleSave')
+    
+    if (error instanceof AppError && error.isRetryable) {
+      // Show retry option
+      setShowRetryDialog(true)
+    } else {
+      // Show generic error message
+      showErrorToast('Failed to save entry')
+    }
+  }
+}
+```
+
+## 7. Testing Rules
+
+### Unit Test Structure
+```typescript
+// __tests__/services/journalService.test.ts
+describe('JournalService', () => {
+  describe('parseHashtags', () => {
+    it('should extract hashtags with duration', () => {
+      const content = '#HEALTH 30min\n- Running\n#WORK 2h'
+      const result = journalService.parseHashtags(content)
+      
+      expect(result).toEqual([
+        { tag: 'HEALTH', duration: 30 },
+        { tag: 'WORK', duration: 120 }
+      ])
+    })
+    
+    it('should handle hashtags without duration', () => {
+      const content = '#MEDITATION\n- 10 minutes of breathing'
+      const result = journalService.parseHashtags(content)
+      
+      expect(result).toEqual([
+        { tag: 'MEDITATION', duration: undefined }
+      ])
+    })
+  })
+})
+```
+
+## 8. Performance & Optimization
+
+### Image and Asset Rules
+```typescript
+// Use optimized images
+const images = {
+  // Use require for bundled assets
+  emptyState: require('../assets/images/empty-state.png'),
+  // Use remote URLs with caching for dynamic content
+  userAvatar: { uri: avatarUrl, cache: 'force-cache' }
+}
+
+// Lazy load heavy components
+const SocialFeed = lazy(() => import('../screens/SocialFeed'))
+```
+
+### Memory Management
+```typescript
+// Clean up subscriptions and timers
+useEffect(() => {
+  const timer = setInterval(autoSave, 30000)
+  const subscription = syncService.onSyncComplete(handleSyncComplete)
+  
+  return () => {
+    clearInterval(timer)
+    subscription.unsubscribe()
+  }
+}, [])
+```
+
+## 9. Security Rules
+
+### Data Sanitization
+```typescript
+// Always sanitize user input
+const sanitizeContent = (content: string): string => {
+  return content
+    .trim()
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .substring(0, MAX_CONTENT_LENGTH)
+}
+
+// Validate hashtags
+const isValidHashtag = (tag: string): boolean => {
+  return /^[A-Z][A-Z0-9_]{0,19}$/i.test(tag)
+}
+```
+
+### Privacy Controls
+```typescript
+// Check sharing permissions before displaying content
+const canViewEntry = (entry: JournalEntry, currentUser: User): boolean => {
+  if (entry.userId === currentUser.id) return true
+  if (!entry.isShared) return false
+  
+  // Check if user has permission to view shared content
+  return entry.sharedWith.includes(currentUser.id) || entry.isPublic
+}
+```
+
+## 10. Code Quality Rules
+
+### Linting Configuration
+```json
+// .eslintrc.js
+{
+  "extends": [
+    "@react-native-community",
+    "@typescript-eslint/recommended"
+  ],
+  "rules": {
+    "no-console": "warn",
+    "prefer-const": "error",
+    "@typescript-eslint/no-unused-vars": "error",
+    "@typescript-eslint/explicit-function-return-type": "warn",
+    "react-hooks/exhaustive-deps": "error"
+  }
+}
+```
+
+### Pre-commit Hooks
+```json
+// package.json
+{
+  "husky": {
+    "hooks": {
+      "pre-commit": "lint-staged && npm test"
+    }
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": ["eslint --fix", "prettier --write"]
+  }
+}
+```
+
+These coding standards ensure the GoalFlow app maintains high code quality, performance, and reliability while staying true to its gentle, supportive philosophy.

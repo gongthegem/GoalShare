@@ -1,0 +1,749 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# GoalFlow Core Coding Principles
+
+## 1. SOLID Principles Applied to React Native
+
+### Single Responsibility Principle (SRP)
+```typescript
+// ❌ BAD: Component doing too many things
+const JournalScreen = () => {
+  // Handles UI, data fetching, validation, sync, analytics...
+  const [entry, setEntry] = useState('')
+  const validateEntry = () => { /* validation logic */ }
+  const syncToCloud = () => { /* sync logic */ }
+  const trackAnalytics = () => { /* analytics logic */ }
+  // ... 200 lines of mixed concerns
+}
+
+// ✅ GOOD: Separated concerns
+const JournalEntryEditor = ({ entry, onSave }) => {
+  // Only handles UI and user input
+}
+
+const useJournalValidation = () => {
+  // Only handles validation logic
+}
+
+const useJournalSync = () => {
+  // Only handles sync operations
+}
+
+const useJournalAnalytics = () => {
+  // Only handles analytics tracking
+}
+```
+
+### Open/Closed Principle (OCP)
+```typescript
+// ✅ GOOD: Extensible without modification
+interface NotificationStrategy {
+  send(message: string, userId: string): Promise<void>
+}
+
+class PushNotificationStrategy implements NotificationStrategy {
+  async send(message: string, userId: string): Promise<void> {
+    // Push notification implementation
+  }
+}
+
+class EmailNotificationStrategy implements NotificationStrategy {
+  async send(message: string, userId: string): Promise<void> {
+    // Email implementation
+  }
+}
+
+// Easy to add new notification types without changing existing code
+class SMSNotificationStrategy implements NotificationStrategy {
+  async send(message: string, userId: string): Promise<void> {
+    // SMS implementation
+  }
+}
+
+class NotificationService {
+  constructor(private strategy: NotificationStrategy) {}
+  
+  async notify(message: string, userId: string): Promise<void> {
+    return this.strategy.send(message, userId)
+  }
+}
+```
+
+### Dependency Inversion Principle (DIP)
+```typescript
+// ❌ BAD: High-level module depends on low-level module
+class JournalService {
+  private supabaseClient = new SupabaseClient() // Direct dependency
+  
+  async saveEntry(entry: JournalEntry): Promise<void> {
+    await this.supabaseClient.insert(entry)
+  }
+}
+
+// ✅ GOOD: Depend on abstractions
+interface DatabaseAdapter {
+  save(entry: JournalEntry): Promise<void>
+  findById(id: string): Promise<JournalEntry | null>
+}
+
+class SupabaseAdapter implements DatabaseAdapter {
+  async save(entry: JournalEntry): Promise<void> {
+    // Supabase implementation
+  }
+  
+  async findById(id: string): Promise<JournalEntry | null> {
+    // Supabase implementation
+  }
+}
+
+class JournalService {
+  constructor(private database: DatabaseAdapter) {}
+  
+  async saveEntry(entry: JournalEntry): Promise<void> {
+    await this.database.save(entry)
+  }
+}
+```
+
+## 2. DRY (Don't Repeat Yourself)
+
+### Extract Common Logic
+```typescript
+// ❌ BAD: Repeated validation logic
+const validateJournalEntry = (entry: string): ValidationResult => {
+  if (!entry) return { isValid: false, error: 'Entry cannot be empty' }
+  if (entry.length > 5000) return { isValid: false, error: 'Entry too long' }
+  return { isValid: true }
+}
+
+const validateHashtag = (hashtag: string): ValidationResult => {
+  if (!hashtag) return { isValid: false, error: 'Hashtag cannot be empty' }
+  if (hashtag.length > 50) return { isValid: false, error: 'Hashtag too long' }
+  return { isValid: true }
+}
+
+// ✅ GOOD: Generic validator with configuration
+interface ValidationRule {
+  required?: boolean
+  maxLength?: number
+  minLength?: number
+  pattern?: RegExp
+  customValidator?: (value: string) => string | null
+}
+
+const createValidator = (rules: ValidationRule) => {
+  return (value: string): ValidationResult => {
+    if (rules.required && !value) {
+      return { isValid: false, error: 'This field is required' }
+    }
+    
+    if (rules.maxLength && value.length > rules.maxLength) {
+      return { isValid: false, error: `Maximum ${rules.maxLength} characters` }
+    }
+    
+    if (rules.minLength && value.length < rules.minLength) {
+      return { isValid: false, error: `Minimum ${rules.minLength} characters` }
+    }
+    
+    if (rules.pattern && !rules.pattern.test(value)) {
+      return { isValid: false, error: 'Invalid format' }
+    }
+    
+    if (rules.customValidator) {
+      const error = rules.customValidator(value)
+      if (error) return { isValid: false, error }
+    }
+    
+    return { isValid: true }
+  }
+}
+
+// Usage
+const validateJournalEntry = createValidator({ 
+  required: true, 
+  maxLength: 5000 
+})
+
+const validateHashtag = createValidator({ 
+  required: true, 
+  maxLength: 50,
+  pattern: /^#[A-Z][A-Z0-9_]*$/i
+})
+```
+
+### Reusable UI Components
+```typescript
+// ✅ GOOD: Generic, reusable components
+interface BaseInputProps {
+  value: string
+  onChangeText: (text: string) => void
+  placeholder?: string
+  error?: string
+  label?: string
+  maxLength?: number
+  multiline?: boolean
+}
+
+const BaseInput: React.FC<BaseInputProps> = ({
+  value,
+  onChangeText,
+  placeholder,
+  error,
+  label,
+  maxLength,
+  multiline = false
+}) => {
+  return (
+    <View style={styles.container}>
+      {label && <Text style={styles.label}>{label}</Text>}
+      <TextInput
+        style={[styles.input, error && styles.errorInput]}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        maxLength={maxLength}
+        multiline={multiline}
+      />
+      {error && <Text style={styles.errorText}>{error}</Text>}
+    </View>
+  )
+}
+
+// Specialized components built on top
+const JournalInput = (props: Omit<BaseInputProps, 'multiline' | 'maxLength'>) => (
+  <BaseInput {...props} multiline maxLength={5000} />
+)
+
+const HashtagInput = (props: Omit<BaseInputProps, 'maxLength' | 'placeholder'>) => (
+  <BaseInput {...props} maxLength={50} placeholder="#HASHTAG" />
+)
+```
+
+## 3. KISS (Keep It Simple, Stupid)
+
+### Simple, Clear Functions
+```typescript
+// ❌ BAD: Complex, hard to understand
+const processEntryData = (data: any): any => {
+  return data.entries.map((e: any) => ({
+    ...e,
+    hashtags: e.content.match(/#\w+/g)?.map((h: string) => ({
+      tag: h.slice(1).toUpperCase(),
+      duration: e.content.match(new RegExp(`${h}\\s+(\\d+)(min|h)`))?.[1] 
+        ? parseInt(e.content.match(new RegExp(`${h}\\s+(\\d+)(min|h)`))?.[1]) * 
+          (e.content.match(new RegExp(`${h}\\s+(\\d+)(min|h)`))?.[2] === 'h' ? 60 : 1)
+        : undefined
+    })) || []
+  }))
+}
+
+// ✅ GOOD: Simple, focused functions
+const extractHashtags = (content: string): string[] => {
+  return content.match(/#\w+/g) || []
+}
+
+const extractDuration = (content: string, hashtag: string): number | undefined => {
+  const match = content.match(new RegExp(`${hashtag}\\s+(\\d+)(min|h)`))
+  if (!match) return undefined
+  
+  const value = parseInt(match[1])
+  const unit = match[2]
+  
+  return unit === 'h' ? value * 60 : value
+}
+
+const parseHashtagData = (content: string): HashtagData[] => {
+  const hashtags = extractHashtags(content)
+  
+  return hashtags.map(hashtag => ({
+    tag: hashtag.slice(1).toUpperCase(),
+    duration: extractDuration(content, hashtag)
+  }))
+}
+
+const processJournalEntry = (entry: RawJournalEntry): JournalEntry => {
+  return {
+    ...entry,
+    hashtags: parseHashtagData(entry.content)
+  }
+}
+```
+
+## 4. YAGNI (You Aren't Gonna Need It)
+
+### Build Only What's Required
+```typescript
+// ❌ BAD: Over-engineering for future needs
+class JournalEntry {
+  // Current requirements only need basic fields
+  id: string
+  content: string
+  userId: string
+  createdAt: Date
+  
+  // ❌ These might never be needed
+  priority?: 'low' | 'medium' | 'high'
+  category?: string
+  isArchived?: boolean
+  reminderDate?: Date
+  attachments?: File[]
+  collaborators?: string[]
+  version?: number
+  parentId?: string
+  isTemplate?: boolean
+  customFields?: Record<string, any>
+}
+
+// ✅ GOOD: Only what's needed now
+interface JournalEntry {
+  id: string
+  content: string
+  userId: string
+  createdAt: Date
+  submittedAt: Date | null
+  hashtags: HashtagData[]
+  isDraft: boolean
+}
+
+// Add new fields only when actually needed
+```
+
+## 5. Low Coupling, High Cohesion
+
+### Loose Coupling Through Dependency Injection
+```typescript
+// ✅ GOOD: Components don't know about each other directly
+interface JournalScreenProps {
+  journalService: JournalService
+  syncService: SyncService
+  analyticsService: AnalyticsService
+}
+
+const JournalScreen: React.FC<JournalScreenProps> = ({
+  journalService,
+  syncService,
+  analyticsService
+}) => {
+  // Screen logic
+}
+
+// Services are injected at the app level
+const App = () => {
+  const journalService = new JournalService(databaseAdapter)
+  const syncService = new SyncService(cloudAdapter)
+  const analyticsService = new AnalyticsService()
+  
+  return (
+    <JournalScreen
+      journalService={journalService}
+      syncService={syncService}
+      analyticsService={analyticsService}
+    />
+  )
+}
+```
+
+### High Cohesion - Related Code Together
+```typescript
+// ✅ GOOD: All hashtag-related functionality in one place
+class HashtagService {
+  parse(content: string): HashtagData[] {
+    // Parse hashtags from content
+  }
+  
+  validate(hashtag: string): ValidationResult {
+    // Validate hashtag format
+  }
+  
+  formatForDisplay(hashtag: HashtagData): string {
+    // Format for UI display
+  }
+  
+  calculateTotalDuration(hashtags: HashtagData[]): number {
+    // Calculate total time
+  }
+  
+  groupByTag(hashtags: HashtagData[]): Record<string, HashtagData[]> {
+    // Group hashtags
+  }
+}
+```
+
+## 6. Test-Driven Development (TDD)
+
+### Red-Green-Refactor Cycle
+```typescript
+// 1. RED: Write failing test first
+describe('HashtagService', () => {
+  it('should parse hashtags with duration from journal content', () => {
+    const content = '#HEALTH 30min\n- Running in the park\n#WORK 2h\n- Code review'
+    const service = new HashtagService()
+    
+    const result = service.parse(content)
+    
+    expect(result).toEqual([
+      { tag: 'HEALTH', duration: 30 },
+      { tag: 'WORK', duration: 120 }
+    ])
+  })
+})
+
+// 2. GREEN: Write minimal code to pass
+class HashtagService {
+  parse(content: string): HashtagData[] {
+    const hashtagMatches = content.match(/#\w+\s+\d+(min|h)/g) || []
+    
+    return hashtagMatches.map(match => {
+      const [tag, durationStr] = match.split(' ')
+      const duration = this.parseDuration(durationStr)
+      
+      return {
+        tag: tag.slice(1).toUpperCase(),
+        duration
+      }
+    })
+  }
+  
+  private parseDuration(durationStr: string): number {
+    const match = durationStr.match(/(\d+)(min|h)/)
+    if (!match) return 0
+    
+    const value = parseInt(match[1])
+    const unit = match[2]
+    
+    return unit === 'h' ? value * 60 : value
+  }
+}
+
+// 3. REFACTOR: Improve code while keeping tests green
+// Add more tests for edge cases, then refactor implementation
+```
+
+### Test Structure - AAA Pattern
+```typescript
+describe('JournalService', () => {
+  describe('submitEntry', () => {
+    it('should mark entry as submitted with timestamp', async () => {
+      // ARRANGE
+      const mockDatabase = new MockDatabaseAdapter()
+      const service = new JournalService(mockDatabase)
+      const entry: JournalEntry = {
+        id: '1',
+        content: 'Test entry',
+        userId: 'user1',
+        createdAt: new Date(),
+        submittedAt: null,
+        hashtags: [],
+        isDraft: true
+      }
+      
+      // ACT
+      const result = await service.submitEntry(entry)
+      
+      // ASSERT
+      expect(result.isDraft).toBe(false)
+      expect(result.submittedAt).toBeInstanceOf(Date)
+      expect(mockDatabase.save).toHaveBeenCalledWith(result)
+    })
+  })
+})
+```
+
+## 7. Composition Over Inheritance
+
+### Favor Composition
+```typescript
+// ❌ BAD: Inheritance hierarchy
+class BaseEntry {
+  id: string
+  createdAt: Date
+  
+  save() { /* ... */ }
+  validate() { /* ... */ }
+}
+
+class JournalEntry extends BaseEntry {
+  content: string
+  
+  submitEntry() { /* ... */ }
+}
+
+class SharedEntry extends JournalEntry {
+  sharedWith: string[]
+  
+  share() { /* ... */ }
+}
+
+// ✅ GOOD: Composition with interfaces
+interface Saveable {
+  save(): Promise<void>
+}
+
+interface Validatable {
+  validate(): ValidationResult
+}
+
+interface Shareable {
+  share(userIds: string[]): Promise<void>
+}
+
+class JournalEntry implements Saveable, Validatable {
+  constructor(
+    private saveService: SaveService,
+    private validationService: ValidationService
+  ) {}
+  
+  async save(): Promise<void> {
+    const validation = this.validate()
+    if (!validation.isValid) throw new Error(validation.error)
+    
+    await this.saveService.save(this)
+  }
+  
+  validate(): ValidationResult {
+    return this.validationService.validate(this)
+  }
+}
+
+// Mix and match behaviors as needed
+class SharedJournalEntry extends JournalEntry implements Shareable {
+  constructor(
+    saveService: SaveService,
+    validationService: ValidationService,
+    private shareService: ShareService
+  ) {
+    super(saveService, validationService)
+  }
+  
+  async share(userIds: string[]): Promise<void> {
+    await this.shareService.share(this, userIds)
+  }
+}
+```
+
+## 8. Fail Fast Principle
+
+### Early Validation and Error Detection
+```typescript
+// ✅ GOOD: Validate early, fail fast
+const createJournalEntry = (data: CreateJournalEntryRequest): JournalEntry => {
+  // Validate immediately at the boundary
+  if (!data.userId) {
+    throw new AppError('User ID is required', 'MISSING_USER_ID')
+  }
+  
+  if (!data.content?.trim()) {
+    throw new AppError('Content cannot be empty', 'EMPTY_CONTENT')
+  }
+  
+  if (data.content.length > MAX_CONTENT_LENGTH) {
+    throw new AppError(
+      `Content exceeds maximum length of ${MAX_CONTENT_LENGTH}`,
+      'CONTENT_TOO_LONG'
+    )
+  }
+  
+  // Only proceed with valid data
+  return {
+    id: generateId(),
+    userId: data.userId,
+    content: data.content.trim(),
+    createdAt: new Date(),
+    submittedAt: null,
+    hashtags: parseHashtags(data.content),
+    isDraft: true
+  }
+}
+
+// Use type guards for runtime type checking
+const isJournalEntry = (data: unknown): data is JournalEntry => {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    'id' in data &&
+    'userId' in data &&
+    'content' in data &&
+    'createdAt' in data
+  )
+}
+
+const processJournalEntry = (data: unknown): JournalEntry => {
+  // Fail fast if data is invalid
+  if (!isJournalEntry(data)) {
+    throw new AppError('Invalid journal entry data', 'INVALID_DATA')
+  }
+  
+  return data
+}
+```
+
+## 9. Immutability Principle
+
+### Immutable State Updates
+```typescript
+// ❌ BAD: Mutating state directly
+const updateEntry = (entries: JournalEntry[], id: string, newContent: string) => {
+  const entry = entries.find(e => e.id === id)
+  if (entry) {
+    entry.content = newContent // ❌ Mutation
+    entry.updatedAt = new Date() // ❌ Mutation
+  }
+  return entries
+}
+
+// ✅ GOOD: Immutable updates
+const updateEntry = (
+  entries: JournalEntry[], 
+  id: string, 
+  newContent: string
+): JournalEntry[] => {
+  return entries.map(entry => 
+    entry.id === id 
+      ? { 
+          ...entry, 
+          content: newContent,
+          updatedAt: new Date(),
+          hashtags: parseHashtags(newContent)
+        }
+      : entry
+  )
+}
+
+// For complex updates, use immer
+import produce from 'immer'
+
+const updateEntryWithImmer = (
+  entries: JournalEntry[], 
+  id: string, 
+  updates: Partial<JournalEntry>
+): JournalEntry[] => {
+  return produce(entries, draft => {
+    const entry = draft.find(e => e.id === id)
+    if (entry) {
+      Object.assign(entry, updates, { updatedAt: new Date() })
+    }
+  })
+}
+```
+
+## 10. Command Query Separation (CQS)
+
+### Separate Commands from Queries
+```typescript
+// ✅ GOOD: Clear separation
+class JournalService {
+  // QUERIES - Return data, no side effects
+  getEntry(id: string): Promise<JournalEntry | null> {
+    return this.database.findById(id)
+  }
+  
+  getEntriesByUser(userId: string): Promise<JournalEntry[]> {
+    return this.database.findByUserId(userId)
+  }
+  
+  getCurrentStreak(userId: string): Promise<number> {
+    return this.streakCalculator.calculate(userId)
+  }
+  
+  // COMMANDS - Modify state, return void or minimal status
+  async createEntry(data: CreateJournalEntryRequest): Promise<void> {
+    const entry = this.entryFactory.create(data)
+    await this.database.save(entry)
+    this.eventBus.publish(new EntryCreatedEvent(entry))
+  }
+  
+  async submitEntry(id: string): Promise<void> {
+    const entry = await this.database.findById(id)
+    if (!entry) throw new AppError('Entry not found', 'NOT_FOUND')
+    
+    const submittedEntry = { ...entry, submittedAt: new Date(), isDraft: false }
+    await this.database.save(submittedEntry)
+    this.eventBus.publish(new EntrySubmittedEvent(submittedEntry))
+  }
+  
+  async deleteEntry(id: string): Promise<void> {
+    await this.database.delete(id)
+    this.eventBus.publish(new EntryDeletedEvent(id))
+  }
+}
+```
+
+## 11. Error Handling Principles
+
+### Consistent Error Handling Strategy
+```typescript
+// Custom error hierarchy
+class AppError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+    public readonly isRetryable: boolean = false,
+    public readonly metadata?: Record<string, any>
+  ) {
+    super(message)
+    this.name = 'AppError'
+  }
+}
+
+class ValidationError extends AppError {
+  constructor(message: string, field?: string) {
+    super(message, 'VALIDATION_ERROR', false, { field })
+  }
+}
+
+class NetworkError extends AppError {
+  constructor(message: string) {
+    super(message, 'NETWORK_ERROR', true)
+  }
+}
+
+// Centralized error handling
+const handleError = (error: unknown, context: string): never => {
+  if (error instanceof AppError) {
+    // Log structured error
+    logger.error('Application error', {
+      code: error.code,
+      message: error.message,
+      context,
+      isRetryable: error.isRetryable,
+      metadata: error.metadata
+    })
+    
+    throw error
+  }
+  
+  // Unknown error - wrap it
+  logger.error('Unknown error', { error, context })
+  throw new AppError(
+    'An unexpected error occurred',
+    'UNKNOWN_ERROR',
+    false,
+    { originalError: error, context }
+  )
+}
+
+// Usage in services
+class JournalService {
+  async submitEntry(id: string): Promise<void> {
+    try {
+      const entry = await this.database.findById(id)
+      if (!entry) {
+        throw new AppError('Entry not found', 'ENTRY_NOT_FOUND')
+      }
+      
+      await this.database.save({
+        ...entry,
+        submittedAt: new Date(),
+        isDraft: false
+      })
+    } catch (error) {
+      handleError(error, 'JournalService.submitEntry')
+    }
+  }
+}
+```
+
+These core principles ensure that GoalFlow's codebase remains maintainable, testable, and aligned with the app's gentle, supportive philosophy while maintaining high code quality and developer productivity.

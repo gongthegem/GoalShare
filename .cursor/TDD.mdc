@@ -1,0 +1,547 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Test-Driven Development Best Practices for GoalFlow
+
+## 1. TDD Workflow: Red-Green-Refactor
+
+### The Complete TDD Cycle
+
+```typescript
+// STEP 1: RED - Write a failing test first
+describe('HashtagService - New Requirement: Color-coded hashtags', () => {
+  it('should assign default colors to new hashtags', () => {
+    // Arrange
+    const service = new HashtagService()
+    const content = '#HEALTH 30min\n#WORK 2h'
+    
+    // Act
+    const result = service.parseWithColors(content)
+    
+    // Assert
+    expect(result).toEqual([
+      { tag: 'HEALTH', duration: 30, color: '#4CAF50' }, // Green for health
+      { tag: 'WORK', duration: 120, color: '#2196F3' }   // Blue for work
+    ])
+  })
+})
+
+// Test fails because parseWithColors doesn't exist yet
+
+// STEP 2: GREEN - Write minimal code to make test pass
+class HashtagService {
+  private defaultColors = {
+    HEALTH: '#4CAF50',
+    WORK: '#2196F3',
+    LEARNING: '#FF9800',
+    CREATIVE: '#9C27B0'
+  }
+  
+  parseWithColors(content: string): HashtagWithColor[] {
+    const hashtags = this.parse(content) // Existing method
+    
+    return hashtags.map(hashtag => ({
+      ...hashtag,
+      color: this.defaultColors[hashtag.tag] || '#757575' // Default gray
+    }))
+  }
+}
+
+// STEP 3: REFACTOR - Improve code while keeping tests green
+class HashtagService {
+  constructor(private colorService: ColorService) {}
+  
+  parseWithColors(content: string): HashtagWithColor[] {
+    const hashtags = this.parse(content)
+    
+    return hashtags.map(hashtag => ({
+      ...hashtag,
+      color: this.colorService.getColorForTag(hashtag.tag)
+    }))
+  }
+}
+
+// Add more tests for edge cases
+describe('HashtagService - Edge cases', () => {
+  it('should handle unknown hashtags with default color', () => {
+    const service = new HashtagService(new ColorService())
+    const content = '#UNKNOWN_TAG 1h'
+    
+    const result = service.parseWithColors(content)
+    
+    expect(result[0].color).toBe('#757575') // Default color
+  })
+})
+```
+
+## 2. Handling New Requirements with TDD
+
+### Example: New Requirement - "Add streak bonuses for consistent logging"
+
+#### Step 1: Understand and Break Down the Requirement
+```typescript
+// Requirements Analysis:
+// - Users get bonus points for consecutive days of logging
+// - 7-day streak = 10 bonus points
+// - 30-day streak = 50 bonus points  
+// - 365-day streak = 500 bonus points
+// - Bonus points reset if streak is broken
+```
+
+#### Step 2: Write Tests for the New Feature (Outside-In TDD)
+```typescript
+// Start with high-level integration test
+describe('StreakBonusService - Integration', () => {
+  it('should award 7-day streak bonus when user completes week', async () => {
+    // Arrange
+    const userId = 'user123'
+    const streakService = new StreakBonusService(mockDatabase, mockNotificationService)
+    
+    // Create 7 consecutive journal entries
+    const entries = Array.from({ length: 7 }, (_, i) => 
+      createMockEntry(userId, subDays(new Date(), 6 - i))
+    )
+    
+    // Act
+    const bonus = await streakService.calculateBonus(userId, entries)
+    
+    // Assert
+    expect(bonus.points).toBe(10)
+    expect(bonus.type).toBe('WEEKLY_STREAK')
+    expect(bonus.message).toBe('🔥 7-day streak! You\'re on fire!')
+  })
+})
+
+// Then write unit tests for individual components
+describe('StreakCalculator', () => {
+  it('should calculate consecutive days correctly', () => {
+    // Arrange
+    const calculator = new StreakCalculator()
+    const entries = [
+      { submittedAt: new Date('2024-01-01') },
+      { submittedAt: new Date('2024-01-02') },
+      { submittedAt: new Date('2024-01-03') },
+      // Gap on 2024-01-04
+      { submittedAt: new Date('2024-01-05') },
+      { submittedAt: new Date('2024-01-06') }
+    ]
+    
+    // Act
+    const streak = calculator.getCurrentStreak(entries, new Date('2024-01-06'))
+    
+    // Assert
+    expect(streak).toBe(2) // Only counts current consecutive streak
+  })
+  
+  it('should handle empty entries array', () => {
+    const calculator = new StreakCalculator()
+    const streak = calculator.getCurrentStreak([], new Date())
+    expect(streak).toBe(0)
+  })
+})
+```
+
+#### Step 3: Implement the Minimum Code to Pass
+```typescript
+interface StreakBonus {
+  points: number
+  type: 'WEEKLY_STREAK' | 'MONTHLY_STREAK' | 'YEARLY_STREAK'
+  message: string
+}
+
+class StreakCalculator {
+  getCurrentStreak(entries: JournalEntry[], currentDate: Date): number {
+    if (entries.length === 0) return 0
+    
+    const sortedEntries = entries
+      .filter(entry => entry.submittedAt)
+      .sort((a, b) => b.submittedAt!.getTime() - a.submittedAt!.getTime())
+    
+    let streak = 0
+    let checkDate = startOfDay(currentDate)
+    
+    for (const entry of sortedEntries) {
+      const entryDate = startOfDay(entry.submittedAt!)
+      
+      if (isSameDay(entryDate, checkDate) || isSameDay(entryDate, subDays(checkDate, 1))) {
+        streak++
+        checkDate = subDays(checkDate, 1)
+      } else {
+        break
+      }
+    }
+    
+    return streak
+  }
+}
+
+class StreakBonusService {
+  constructor(
+    private database: DatabaseService,
+    private notificationService: NotificationService
+  ) {}
+  
+  async calculateBonus(userId: string, entries: JournalEntry[]): Promise<StreakBonus | null> {
+    const currentStreak = new StreakCalculator().getCurrentStreak(entries, new Date())
+    
+    if (currentStreak >= 365) {
+      return { points: 500, type: 'YEARLY_STREAK', message: '🏆 365-day streak! Legendary!' }
+    } else if (currentStreak >= 30) {
+      return { points: 50, type: 'MONTHLY_STREAK', message: '🌟 30-day streak! Amazing consistency!' }
+    } else if (currentStreak >= 7) {
+      return { points: 10, type: 'WEEKLY_STREAK', message: '🔥 7-day streak! You\'re on fire!' }
+    }
+    
+    return null
+  }
+}
+```
+
+#### Step 4: Refactor and Add Edge Cases
+```typescript
+// Add more comprehensive tests
+describe('StreakBonusService - Edge Cases', () => {
+  it('should not award duplicate bonuses for same streak', async () => {
+    // Test that we don't award 7-day bonus multiple times for 8, 9, 10 day streaks
+  })
+  
+  it('should handle timezone differences correctly', async () => {
+    // Test with entries from different timezones
+  })
+  
+  it('should award highest applicable bonus only', async () => {
+    // 365-day streak should get yearly bonus, not all three
+  })
+})
+
+// Refactor implementation
+class StreakBonusService {
+  private readonly BONUS_TIERS = [
+    { days: 365, points: 500, type: 'YEARLY_STREAK' as const, message: '🏆 365-day streak! Legendary!' },
+    { days: 30, points: 50, type: 'MONTHLY_STREAK' as const, message: '🌟 30-day streak! Amazing consistency!' },
+    { days: 7, points: 10, type: 'WEEKLY_STREAK' as const, message: '🔥 7-day streak! You\'re on fire!' }
+  ]
+  
+  async calculateBonus(userId: string, entries: JournalEntry[]): Promise<StreakBonus | null> {
+    const currentStreak = this.streakCalculator.getCurrentStreak(entries, new Date())
+    
+    // Find highest applicable bonus
+    const applicableBonus = this.BONUS_TIERS.find(tier => currentStreak >= tier.days)
+    
+    if (applicableBonus && !await this.hasReceivedBonus(userId, applicableBonus.type, currentStreak)) {
+      await this.recordBonusAwarded(userId, applicableBonus.type, currentStreak)
+      return applicableBonus
+    }
+    
+    return null
+  }
+}
+```
+
+## 3. Handling Bug Reports with TDD
+
+### Example: Bug Report - "App crashes when user submits empty hashtag"
+
+#### Step 1: Write a Failing Test that Reproduces the Bug
+```typescript
+describe('HashtagService - Bug Fix: Empty hashtag crash', () => {
+  it('should handle empty hashtags gracefully without crashing', () => {
+    // Arrange
+    const service = new HashtagService()
+    const contentWithEmptyHashtag = '#\n# \n#VALID 30min'
+    
+    // Act & Assert - This should not throw
+    expect(() => {
+      const result = service.parse(contentWithEmptyHashtag)
+      expect(result).toEqual([
+        { tag: 'VALID', duration: 30 }
+      ])
+    }).not.toThrow()
+  })
+  
+  it('should filter out hashtags with only special characters', () => {
+    const service = new HashtagService()
+    const content = '#@#$ 30min\n#123 1h\n#VALID 2h'
+    
+    const result = service.parse(content)
+    
+    expect(result).toEqual([
+      { tag: 'VALID', duration: 120 }
+    ])
+  })
+})
+```
+
+#### Step 2: Run Test - Confirm it Fails (Reproduces Bug)
+```bash
+npm test -- --grep "empty hashtag"
+# Test should fail and show the exact error that users are experiencing
+```
+
+#### Step 3: Fix the Bug with Minimal Code
+```typescript
+class HashtagService {
+  parse(content: string): HashtagData[] {
+    const hashtagMatches = content.match(/#\w+(\s+\d+(min|h))?/g) || []
+    
+    return hashtagMatches
+      .map(match => this.parseHashtagMatch(match))
+      .filter(hashtag => this.isValidHashtag(hashtag)) // Add validation
+  }
+  
+  private parseHashtagMatch(match: string): HashtagData | null {
+    try {
+      const parts = match.trim().split(/\s+/)
+      const tag = parts[0].slice(1).trim().toUpperCase()
+      
+      // Validate tag before processing
+      if (!tag || !this.isValidTagName(tag)) {
+        return null
+      }
+      
+      const durationPart = parts[1]
+      const duration = durationPart ? this.parseDuration(durationPart) : undefined
+      
+      return { tag, duration }
+    } catch (error) {
+      // Log error but don't crash
+      console.warn('Failed to parse hashtag:', match, error)
+      return null
+    }
+  }
+  
+  private isValidTagName(tag: string): boolean {
+    return /^[A-Z][A-Z0-9_]*$/.test(tag) && tag.length > 0 && tag.length <= 50
+  }
+  
+  private isValidHashtag(hashtag: HashtagData | null): hashtag is HashtagData {
+    return hashtag !== null && hashtag.tag.length > 0
+  }
+}
+```
+
+#### Step 4: Add Comprehensive Edge Case Tests
+```typescript
+describe('HashtagService - Comprehensive Edge Cases', () => {
+  const service = new HashtagService()
+  
+  test.each([
+    ['#', []], // Empty hashtag
+    ['# ', []], // Hashtag with only space
+    ['#\n', []], // Hashtag with newline
+    ['#@#$', []], // Special characters
+    ['#123', []], // Numbers only
+    ['#_', []], // Underscore only
+    ['#A', [{ tag: 'A', duration: undefined }]], // Single letter (valid)
+    ['#VERYLONGTAGNAMETHATSHOULDBEREJECTED', []], // Too long
+    ['#VALID\n#\n#ANOTHER', [{ tag: 'VALID' }, { tag: 'ANOTHER' }]], // Mixed valid/invalid
+  ])('should handle edge case: %s', (input, expected) => {
+    const result = service.parse(input)
+    expect(result).toEqual(expected)
+  })
+})
+```
+
+## 4. TDD for React Components
+
+### Testing Component Behavior, Not Implementation
+```typescript
+// ❌ BAD: Testing implementation details
+it('should call setState when input changes', () => {
+  const component = shallow(<JournalInput />)
+  const setStateSpy = jest.spyOn(component.instance(), 'setState')
+  
+  component.find('TextInput').simulate('changeText', 'new content')
+  
+  expect(setStateSpy).toHaveBeenCalled() // Testing implementation
+})
+
+// ✅ GOOD: Testing behavior and user experience
+describe('JournalInput Component', () => {
+  it('should update hashtag suggestions when user types hashtag', async () => {
+    // Arrange
+    const mockOnSuggestion = jest.fn()
+    render(
+      <JournalInput 
+        value=""
+        onChangeText={jest.fn()}
+        onHashtagSuggestion={mockOnSuggestion}
+      />
+    )
+    
+    // Act
+    const input = screen.getByPlaceholderText('What did you work on today?')
+    fireEvent.changeText(input, '#HEA')
+    
+    // Assert
+    await waitFor(() => {
+      expect(mockOnSuggestion).toHaveBeenCalledWith(['HEALTH', 'HEALING'])
+    })
+  })
+  
+  it('should show character count when approaching limit', () => {
+    const longContent = 'a'.repeat(4950) // Near 5000 char limit
+    
+    render(<JournalInput value={longContent} onChangeText={jest.fn()} />)
+    
+    expect(screen.getByText('50 characters remaining')).toBeTruthy()
+  })
+  
+  it('should disable submit when content exceeds maximum length', () => {
+    const tooLongContent = 'a'.repeat(5001)
+    
+    render(<JournalInput value={tooLongContent} onChangeText={jest.fn()} />)
+    
+    expect(screen.getByTestId('submit-button')).toBeDisabled()
+  })
+})
+```
+
+## 5. Integration Testing with TDD
+
+### Testing Complete User Flows
+```typescript
+describe('Daily Entry Submission Flow - Integration', () => {
+  it('should complete full daily entry cycle', async () => {
+    // Arrange - Set up test environment
+    const testDate = new Date('2024-01-15T10:00:00Z')
+    jest.useFakeTimers().setSystemTime(testDate)
+    
+    const mockUser = { id: 'user123', name: 'Test User' }
+    const { store, services } = createTestApp()
+    
+    // Act & Assert - Step through entire user flow
+    
+    // 1. User opens app and sees empty entry
+    const { getByTestId, getByPlaceholderText } = render(
+      <TestAppProvider store={store} services={services}>
+        <JournalScreen />
+      </TestAppProvider>
+    )
+    
+    expect(getByPlaceholderText('What did you work on today?')).toBeTruthy()
+    expect(getByTestId('deadline-timer')).toHaveTextContent('13h 59m remaining')
+    
+    // 2. User adds content throughout the day
+    const input = getByPlaceholderText('What did you work on today?')
+    fireEvent.changeText(input, '#HEALTH 30min\n- Morning run')
+    
+    // Verify auto-save
+    await waitFor(() => {
+      expect(services.journalService.saveDraft).toHaveBeenCalled()
+    })
+    
+    // 3. User adds more content later
+    fireEvent.changeText(input, '#HEALTH 30min\n- Morning run\n#WORK 2h\n- Code review')
+    
+    // 4. Deadline approaches
+    jest.advanceTimersByTime(13 * 60 * 60 * 1000) // Advance 13 hours
+    
+    await waitFor(() => {
+      expect(getByTestId('deadline-timer')).toHaveTextContent('59m remaining')
+    })
+    
+    // 5. Entry auto-submits at deadline
+    jest.advanceTimersByTime(60 * 60 * 1000) // Advance 1 hour to 23:59
+    
+    await waitFor(() => {
+      expect(getByTestId('submission-success')).toHaveTextContent('Day complete! You showed up ✨')
+      expect(services.journalService.submitEntry).toHaveBeenCalled()
+    })
+    
+    // 6. Next day starts fresh
+    jest.advanceTimersByTime(60 * 1000) // Advance 1 minute to midnight
+    
+    await waitFor(() => {
+      expect(getByPlaceholderText('What did you work on today?')).toHaveDisplayValue('')
+      expect(getByTestId('deadline-timer')).toHaveTextContent('23h 59m remaining')
+    })
+  })
+})
+```
+
+## 6. TDD Best Practices Summary
+
+### Test Naming Convention
+```typescript
+// Pattern: should [expected behavior] when [condition]
+describe('StreakCalculator', () => {
+  it('should return 0 when no entries exist', () => {})
+  it('should return 1 when only today has entry', () => {})
+  it('should return 5 when user has logged for 5 consecutive days', () => {})
+  it('should reset count when there is a gap in entries', () => {})
+  it('should handle timezone changes correctly when calculating streaks', () => {})
+})
+```
+
+### Test Organization
+```typescript
+// Group tests by feature/behavior
+describe('JournalService', () => {
+  describe('Entry Creation', () => {
+    // Tests for creating entries
+  })
+  
+  describe('Entry Submission', () => {
+    // Tests for submitting entries
+  })
+  
+  describe('Entry Validation', () => {
+    // Tests for validation logic
+  })
+  
+  describe('Error Handling', () => {
+    // Tests for error scenarios
+  })
+})
+```
+
+### Test Data Management
+```typescript
+// Use factories for test data
+class JournalEntryFactory {
+  static create(overrides: Partial<JournalEntry> = {}): JournalEntry {
+    return {
+      id: generateTestId(),
+      userId: 'test-user',
+      content: 'Test entry content',
+      createdAt: new Date(),
+      submittedAt: null,
+      hashtags: [],
+      isDraft: true,
+      ...overrides
+    }
+  }
+  
+  static createSubmitted(overrides: Partial<JournalEntry> = {}): JournalEntry {
+    return this.create({
+      submittedAt: new Date(),
+      isDraft: false,
+      ...overrides
+    })
+  }
+  
+  static createWithHashtags(hashtags: HashtagData[], overrides: Partial<JournalEntry> = {}): JournalEntry {
+    return this.create({
+      hashtags,
+      content: hashtags.map(h => `#${h.tag} ${h.duration}min`).join('\n'),
+      ...overrides
+    })
+  }
+}
+
+// Usage in tests
+it('should calculate total duration from hashtags', () => {
+  const entry = JournalEntryFactory.createWithHashtags([
+    { tag: 'HEALTH', duration: 30 },
+    { tag: 'WORK', duration: 90 }
+  ])
+  
+  const total = calculateTotalDuration(entry.hashtags)
+  expect(total).toBe(120)
+})
+```
+
+This TDD approach ensures that GoalFlow's features are built with high quality, comprehensive test coverage, and maintainable code that aligns with the app's gentle, supportive philosophy.
